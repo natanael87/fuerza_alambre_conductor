@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simulador de Fuerza de Lorentz</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: #f4f4f9;
+        }
+        #canvas-container {
+            width: 100vw;
+            height: 100vh;
+            display: block;
+        }
+        /* Interfaz de usuario con identidad Azul Tec (#0033A0) */
+        #ui-panel {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: #0033A0;
+            padding: 20px 30px;
+            border-radius: 12px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.3);
+            display: flex;
+            gap: 15px;
+            z-index: 10;
+            color: white;
+            align-items: center;
+        }
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+        }
+        .control-group span {
+            font-size: 14px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+        }
+        button {
+            background-color: transparent;
+            color: white;
+            border: 2px solid white;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            outline: none;
+        }
+        button:hover {
+            background-color: white;
+            color: #0033A0;
+        }
+        button.active {
+            background-color: #FFC72C; /* Acento dorado/amarillo para contraste */
+            border-color: #FFC72C;
+            color: #0033A0;
+        }
+        #legend {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background-color: rgba(255, 255, 255, 0.9);
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            color: #333;
+            border-left: 5px solid #0033A0;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            margin-bottom: 8px;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        .color-box {
+            width: 16px;
+            height: 16px;
+            margin-right: 10px;
+            border-radius: 4px;
+        }
+    </style>
+    <!-- Carga de Three.js y OrbitControls -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+</head>
+<body>
+
+    <div id="legend">
+        <h3 style="margin: 0 0 10px 0; font-size: 16px; color: #0033A0;">Vectores</h3>
+        <div class="legend-item"><div class="color-box" style="background: #2ECC71;"></div> Campo Magnético (B)</div>
+        <div class="legend-item"><div class="color-box" style="background: #E74C3C;"></div> Corriente (I)</div>
+        <div class="legend-item"><div class="color-box" style="background: #F1C40F;"></div> Fuerza (F)</div>
+    </div>
+
+    <div id="ui-panel">
+        <div class="control-group">
+            <span>Estado de la Corriente</span>
+            <button id="btn-toggle">Encender Corriente</button>
+        </div>
+        <div class="control-group">
+            <span>Dirección de I</span>
+            <button id="btn-dir-i">Invertir (I)</button>
+        </div>
+        <div class="control-group">
+            <span>Polaridad B</span>
+            <button id="btn-dir-b">Invertir (B)</button>
+        </div>
+    </div>
+
+    <div id="canvas-container"></div>
+
+    <script>
+        // Variables globales
+        let scene, camera, renderer, controls;
+        let wire;
+        let arrowI, arrowF;
+        let arrowsB = [];
+        let magnetN, magnetS;
+        
+        // Estado físico
+        let isCurrentActive = false;
+        let currentDir = 1; // 1 = +X, -1 = -X
+        let bFieldDir = -1; // -1 = Norte a Sur hacia -Z, 1 = hacia +Z
+        let targetDeflection = 0;
+        let currentDeflection = 0;
+
+        init();
+        animate();
+
+        function init() {
+            // 1. Configuración básica de la escena
+            const container = document.getElementById('canvas-container');
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0xf4f4f9);
+
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 1, 1000);
+            camera.position.set(20, 20, 30);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            container.appendChild(renderer.domElement);
+
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+
+            // Iluminación
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLight.position.set(10, 20, 10);
+            dirLight.castShadow = true;
+            scene.add(dirLight);
+
+            // 2. Construcción de los elementos físicos
+            createMagnets();
+            createWire();
+            createVectors();
+
+            // 3. Event Listeners para la UI interactiva
+            document.getElementById('btn-toggle').addEventListener('click', toggleCurrent);
+            document.getElementById('btn-dir-i').addEventListener('click', reverseCurrent);
+            document.getElementById('btn-dir-b').addEventListener('click', reverseBField);
+            window.addEventListener('resize', onWindowResize);
+            
+            updatePhysics();
+        }
+
+        function createMagnets() {
+            const magnetGeometry = new THREE.BoxGeometry(10, 10, 2);
+            
+            // Materiales: Rojo para Norte, Gris Oscuro para Sur
+            const matN = new THREE.MeshPhongMaterial({ color: 0xCC0000 });
+            const matS = new THREE.MeshPhongMaterial({ color: 0x555555 });
+
+            magnetN = new THREE.Mesh(magnetGeometry, matN);
+            magnetN.position.set(0, 0, 10);
+            magnetN.castShadow = true;
+            scene.add(magnetN);
+
+            magnetS = new THREE.Mesh(magnetGeometry, matS);
+            magnetS.position.set(0, 0, -10);
+            magnetS.castShadow = true;
+            scene.add(magnetS);
+
+            // Letras N y S (simplificadas con cubos por compatibilidad sin cargar fuentes externas)
+            addLabel(magnetN, 'N');
+            addLabel(magnetS, 'S');
+        }
+
+        function addLabel(parent, text) {
+            // Para mantenerlo simple y en un solo archivo, creamos una textura en canvas para las letras
+            const canvas = document.createElement('canvas');
+            canvas.width = 256; canvas.height = 256;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = 'white';
+            ctx.font = 'Bold 150px Arial';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(text, 128, 128);
+            
+            const texture = new THREE.CanvasTexture(canvas);
+            const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true });
+            const geometry = new THREE.PlaneGeometry(6, 6);
+            const plane = new THREE.Mesh(geometry, material);
+            
+            plane.position.z = text === 'N' ? -1.1 : 1.1;
+            if(text === 'N') plane.rotation.y = Math.PI;
+            parent.add(plane);
+        }
+
+        function createWire() {
+            const wireGeo = new THREE.CylinderGeometry(0.3, 0.3, 25, 32);
+            // Rotar para que el cilindro se acueste sobre el eje X
+            wireGeo.rotateZ(Math.PI / 2);
+            const wireMat = new THREE.MeshStandardMaterial({ color: 0xcd7f32, roughness: 0.3, metalness: 0.8 }); // Color Cobre
+            wire = new THREE.Mesh(wireGeo, wireMat);
+            wire.castShadow = true;
+            scene.add(wire);
+        }
+
+        function createVectors() {
+            // Vectores de Campo B (Verde)
+            for (let i = -3; i <= 3; i += 3) {
+                const dir = new THREE.Vector3(0, 0, -1);
+                const origin = new THREE.Vector3(i, 0, 8);
+                const arrowB = new THREE.ArrowHelper(dir, origin, 16, 0x2ECC71, 1.5, 1);
+                arrowsB.push(arrowB);
+                scene.add(arrowB);
+            }
+
+            // Vector de Corriente I (Rojo)
+            const dirI = new THREE.Vector3(1, 0, 0);
+            const originI = new THREE.Vector3(-10, 1.5, 0);
+            arrowI = new THREE.ArrowHelper(dirI, originI, 6, 0xE74C3C, 1.5, 1);
+            wire.add(arrowI); // Atado al alambre para que se mueva con él
+            arrowI.visible = false;
+
+            // Vector de Fuerza F (Amarillo/Dorado)
+            const dirF = new THREE.Vector3(0, 1, 0);
+            const originF = new THREE.Vector3(0, 0, 0);
+            arrowF = new THREE.ArrowHelper(dirF, originF, 8, 0xF1C40F, 2, 1);
+            wire.add(arrowF);
+            arrowF.visible = false;
+        }
+
+        // --- Lógica Física y Actualización ---
+
+        function updatePhysics() {
+            // Actualizar flechas de Campo B
+            const bVector = new THREE.Vector3(0, 0, bFieldDir).normalize();
+            arrowsB.forEach(arrow => {
+                const startZ = bFieldDir === -1 ? 8 : -8;
+                arrow.position.setZ(startZ);
+                arrow.setDirection(bVector);
+            });
+
+            if (isCurrentActive) {
+                arrowI.visible = true;
+                arrowF.visible = true;
+
+                // Vector Corriente
+                const iVector = new THREE.Vector3(currentDir, 0, 0).normalize();
+                arrowI.setDirection(iVector);
+                arrowI.position.setX(currentDir === 1 ? -10 : 10);
+
+                // Cálculo de Fuerza (Producto Cruz F = I x B)
+                const forceVector = new THREE.Vector3().crossVectors(iVector, bVector);
+                
+                if (forceVector.length() > 0) {
+                    arrowF.setDirection(forceVector.normalize());
+                    // Definir objetivo de deflexión del alambre (desplazamiento físico en Y)
+                    targetDeflection = forceVector.y * 3; // Mover 3 unidades en la dirección de la fuerza
+                } else {
+                    targetDeflection = 0;
+                }
+            } else {
+                arrowI.visible = false;
+                arrowF.visible = false;
+                targetDeflection = 0;
+            }
+        }
+
+        // --- Manejadores de UI ---
+
+        function toggleCurrent() {
+            isCurrentActive = !isCurrentActive;
+            const btn = document.getElementById('btn-toggle');
+            if (isCurrentActive) {
+                btn.textContent = "Apagar Corriente";
+                btn.classList.add('active');
+            } else {
+                btn.textContent = "Encender Corriente";
+                btn.classList.remove('active');
+            }
+            updatePhysics();
+        }
+
+        function reverseCurrent() {
+            currentDir *= -1;
+            updatePhysics();
+        }
+
+        function reverseBField() {
+            bFieldDir *= -1;
+            
+            // Intercambiar posiciones visuales de los imanes
+            const tempZ = magnetN.position.z;
+            magnetN.position.z = magnetS.position.z;
+            magnetS.position.z = tempZ;
+
+            // Rotar las letras N y S para que sigan mirando a la cámara
+            magnetN.children[0].position.z *= -1;
+            magnetS.children[0].position.z *= -1;
+            magnetN.children[0].rotation.y += Math.PI;
+            magnetS.children[0].rotation.y += Math.PI;
+
+            updatePhysics();
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // Interpolación lineal (Lerp) para una deflexión física suave del alambre
+            currentDeflection += (targetDeflection - currentDeflection) * 0.1;
+            wire.position.y = currentDeflection;
+
+            controls.update();
+            renderer.render(scene, camera);
+        }
+    </script>
+</body>
+</html>
